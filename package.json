@@ -1,0 +1,31 @@
+{
+  "name": "@skyblock-server/client",
+  "version": "1.0.0",
+  "description": "Public Client for SkyblockServer",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "npm run generate && npm run clean && tsc",
+    "clean": "node scripts/clean.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SkyblockServer/Client.git"
+  },
+  "author": "TBHGodPro",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/SkyblockServer/Client/issues"
+  },
+  "homepage": "https://github.com/SkyblockServer/Client#readme",
+  "devDependencies": {
+    "@types/node": "^20.2.4",
+    "@types/ws": "^8.5.4",
+    "typescript": "^5.0.4"
+  },
+  "dependencies": {
+    "@skyblock-server/protocol": "^1.0.4",
+    "typed-emitter": "^2.1.0",
+    "ws": "^8.13.0"
+  }
+}
