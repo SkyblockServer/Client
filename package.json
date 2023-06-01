@@ -24,7 +24,7 @@
     "typescript": "^5.0.4"
   },
   "dependencies": {
-    "@skyblock-server/protocol": "^1.0.6",
+    "@skyblock-server/protocol": "^1.0.7",
     "typed-emitter": "^2.1.0",
     "ws": "^8.13.0"
   }
