@@ -23,6 +23,9 @@ export default class SkyblockClient extends (EventEmitter as new () => TypedEmit
   /** The Sequence Number */
   public seq: number;
 
+  /** Whether the Client has emitted the `ready` event yet */
+  public readySent: boolean = false;
+
   /**
    * Public Client for SkyblockServer
    * @param uuid User UUID
@@ -42,10 +45,10 @@ export default class SkyblockClient extends (EventEmitter as new () => TypedEmit
     this.username = username;
     this.apiKey = apiKey;
 
-    this.init();
+    this.connect();
   }
 
-  public init() {
+  public async connect() {
     this.socket = new WebSocket(getURL('WEBSOCKET', true), {
       headers: this.session
         ? {
@@ -61,6 +64,8 @@ export default class SkyblockClient extends (EventEmitter as new () => TypedEmit
     this.socket.on('message', this.onMessage.bind(this));
 
     this.socket.on('ping', () => this.socket.pong());
+
+    return await once(this, 'open');
   }
 
   public log(...data: any[]) {
@@ -83,17 +88,27 @@ export default class SkyblockClient extends (EventEmitter as new () => TypedEmit
   public send(packet: Packet, reject: boolean = false): Promise<boolean> {
     return new Promise((res, rej) => {
       if (this.socket.readyState === WebSocket.OPEN)
-        this.socket.send(packet.buf.buffer, err => {
-          if (err) {
-            if (reject) rej(err);
-            else res(false);
-          } else res(true);
-        });
+        this.socket.send(
+          packet.buf.buffer,
+          {
+            binary: true,
+            compress: true,
+            fin: true,
+          },
+          err => {
+            if (err) {
+              if (reject) rej(err);
+              else res(false);
+            } else res(true);
+          }
+        );
     });
   }
 
-  public onOpen() {
+  private onOpen() {
     this.log('WebSocket Connected!');
+
+    this.emit('open');
 
     this.seq = 1;
 
@@ -107,56 +122,75 @@ export default class SkyblockClient extends (EventEmitter as new () => TypedEmit
       );
   }
 
-  public onClose(code: CloseCodes, reason?: string) {
+  private onClose(code: CloseCodes, reason?: string) {
     this.error(`WebSocket Closed${code ? ` with Code ${code}` : ''}${reason ? ` ${code ? 'and' : 'with'} Reason "${reason}"` : ''}`);
 
-    let resume: boolean;
+    this.emit('closed', code, reason);
+
+    let reconnect: boolean;
 
     switch (code) {
       case CloseCodes.HEARTBEAT_FAILED:
         this.warn("WebSocket failed to heartbeat, this shouldn't happen!");
 
-        resume = true;
+        reconnect = true;
         break;
 
       case CloseCodes.INVALID_MESSAGE:
         this.throw("WebSocket sent an invalid message, this shouldn't happen!\nMake sure the package is up-to-date!");
 
-        resume = false;
+        reconnect = false;
         break;
 
       case CloseCodes.INVALID_IDENTIFY:
         this.throw(`Failed to Identify: ${reason}`);
 
-        resume = false;
+        reconnect = false;
         break;
 
       case CloseCodes.RESUME_FAILED:
         this.warn(`Failed to Resume Connection: ${reason}`);
 
         this.session = null;
-        resume = true;
+        reconnect = true;
         break;
     }
 
-    if (resume) this.init();
+    if (reconnect) this.connect();
   }
 
-  public onError(err: Error) {
+  private onError(err: Error) {
     this.error(...(err.name === 'Error' ? ['Error:', err.name] : [err.name + ':']), err.message);
   }
 
-  public onMessage(raw: WebSocket.RawData) {
-    const msg = readIncomingPacket(raw as Buffer);
+  private onMessage(raw: WebSocket.RawData) {
+    const msg = readIncomingPacket(raw as any);
 
     this.seq += 1;
 
     this.emit('message', msg);
 
     switch (msg.id) {
+      case IncomingPacketIDs.Metadata:
+        this.setupHeartbeater(msg.data.heartbeat_interval);
+
+        this.send(
+          writeOutgoingPacket(OutgoingPacketIDs.Identify, {
+            uuid: this.uuid,
+            username: this.username,
+            apiKey: this.apiKey,
+          })
+        );
+        break;
+
       case IncomingPacketIDs.SessionCreate:
         this.session = msg.data.session_id;
         this.seq = msg.data.seq;
+
+        if (!this.readySent) {
+          this.emit('ready');
+          this.readySent = true;
+        }
         break;
     }
   }
@@ -178,35 +212,50 @@ export default class SkyblockClient extends (EventEmitter as new () => TypedEmit
     return data;
   }
 
+  private setupHeartbeater(interval: number) {
+    setInterval(() => {
+      this.send(writeOutgoingPacket(OutgoingPacketIDs.Heartbeat, {}));
+    }, interval);
+  }
+
   public async fetchAuctions(options: Partial<AuctionFetchOptions>): Promise<ReturnType<typeof readIncomingPacket<IncomingPacketIDs.Auctions>>['data']['auctions']> {
-    const request: ReturnType<typeof readOutgoingPacket<OutgoingPacketIDs.RequestAuctions>>['data'] = {} as any;
+    const request: ReturnType<typeof readOutgoingPacket<OutgoingPacketIDs.RequestAuctions>>['data'] = {
+      filters: [],
+    } as any;
 
     request.query = typeof options.query === 'string' ? options.query : '';
 
     request.order = AuctionSortOrders.includes(options.order) ? options.order : 'random';
 
     request.start = typeof options.start === 'number' ? options.start : 0;
-    request.amount = typeof options.start === 'number' ? request.amount : 100;
+    request.amount = typeof options.amount === 'number' ? options.amount : 100;
 
     if (AuctionCategories.includes(options.category?.toLowerCase?.() as any))
       request.filters.push({
         type: 'category',
-        value: options.category?.toLowerCase?.(),
+        value: options.category.toLowerCase().trim(),
       });
-    if (ItemRarities.includes(options.rarity.toUpperCase().replace(/ /g, '_') as any))
+    if (ItemRarities.includes(options.rarity?.toUpperCase?.().replace?.(/ /g, '_') as any))
       request.filters.push({
         type: 'rarity',
-        value: options.rarity.toUpperCase().replace(/ /g, '_'),
+        value: options.rarity.toUpperCase().trim().replace(/ /g, '_'),
       });
-    if (['auction', 'bin'].includes(options.type.toLowerCase()))
+    if (['auction', 'bin'].includes(options.type?.toLowerCase?.()))
       request.filters.push({
         type: 'type',
-        value: options.type.toLowerCase(),
+        value: options.type.toLowerCase().trim(),
       });
 
     await this.send(writeOutgoingPacket(OutgoingPacketIDs.RequestAuctions, request));
 
     const response = await this.awaitMessage(IncomingPacketIDs.Auctions);
+
+    if (!response?.auctions) this.throw('Failed to fetch auctions');
+
+    response.auctions = response.auctions.map(i => ({
+      ...i,
+      itemData: JSON.parse(i.itemData),
+    }));
 
     return response.auctions;
   }

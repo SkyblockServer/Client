@@ -3,6 +3,10 @@ import { readIncomingPacket } from '@skyblock-server/protocol';
 export type ClientEvents = {
   debug(type: 'log' | 'warn' | 'error' | 'debug', ...data: any[]): void;
   message(msg: ReturnType<typeof readIncomingPacket>): void;
+
+  ready(): void;
+  open(): void;
+  closed(code: CloseCodes, reason?: string): void;
 };
 
 export enum CloseCodes {
